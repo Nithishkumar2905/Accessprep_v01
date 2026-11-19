@@ -35,7 +35,10 @@ import {
   formatAllOptionsPrompt,
   formatSingleOptionPrompt,
   repeatQuestionTextOnly,
-  repeatOptionsTextOnly
+  repeatOptionsTextOnly,
+  repeatCurrentQuestion,
+  repeatCurrentOptions,
+  repeatIndividualOption
 } from '../utils/repeatQuestionHelper.ts';
 
 export type PracticeSessionStep =
@@ -212,6 +215,34 @@ export function VoicePracticeScreen() {
   );
 
   /**
+   * Repeats the currently active question stem aloud.
+   */
+  const repeatQuestionAloud = useCallback(() => {
+    const curQ = questionsRef.current[currentIndexRef.current];
+    if (!curQ) return;
+
+    if (advanceTimerRef.current) {
+      clearTimeout(advanceTimerRef.current);
+      advanceTimerRef.current = null;
+    }
+
+    setSessionStep('READING_QUESTION');
+    sessionStepRef.current = 'READING_QUESTION';
+
+    repeatCurrentQuestion(curQ, {
+      stopSpeaking,
+      speakText,
+      announce,
+      onPlaybackEnd: () => {
+        setSessionStep('LISTENING');
+        sessionStepRef.current = 'LISTENING';
+        playBeacon('listening');
+        startVoiceListening();
+      }
+    });
+  }, [stopSpeaking, announce, speakText, playBeacon, startVoiceListening]);
+
+  /**
    * Reads all four options for the current question aloud.
    */
   const repeatOptionsAloud = useCallback(() => {
@@ -226,16 +257,18 @@ export function VoicePracticeScreen() {
     setSessionStep('READING_OPTIONS');
     sessionStepRef.current = 'READING_OPTIONS';
 
-    const prompt = formatAllOptionsPrompt(curQ);
-    announce('Repeating all four options', 'polite');
-
-    speakText(prompt, () => {
-      setSessionStep('LISTENING');
-      sessionStepRef.current = 'LISTENING';
-      playBeacon('listening');
-      startVoiceListening();
+    repeatCurrentOptions(curQ, {
+      stopSpeaking,
+      speakText,
+      announce,
+      onPlaybackEnd: () => {
+        setSessionStep('LISTENING');
+        sessionStepRef.current = 'LISTENING';
+        playBeacon('listening');
+        startVoiceListening();
+      }
     });
-  }, [announce, speakText, playBeacon, startVoiceListening]);
+  }, [stopSpeaking, announce, speakText, playBeacon, startVoiceListening]);
 
   /**
    * Reads a single specific option (A, B, C, or D) aloud.
@@ -245,17 +278,19 @@ export function VoicePracticeScreen() {
       const curQ = questionsRef.current[currentIndexRef.current];
       if (!curQ) return;
 
-      const prompt = formatSingleOptionPrompt(curQ, opt);
-      announce(`Reading Option ${opt}`, 'polite');
-
-      speakText(prompt, () => {
-        setSessionStep('LISTENING');
-        sessionStepRef.current = 'LISTENING';
-        playBeacon('listening');
-        startVoiceListening();
+      repeatIndividualOption(opt, curQ, {
+        stopSpeaking,
+        speakText,
+        announce,
+        onPlaybackEnd: () => {
+          setSessionStep('LISTENING');
+          sessionStepRef.current = 'LISTENING';
+          playBeacon('listening');
+          startVoiceListening();
+        }
       });
     },
-    [announce, speakText, playBeacon, startVoiceListening]
+    [stopSpeaking, announce, speakText, playBeacon, startVoiceListening]
   );
 
   // ---------------------------------------------------------------------------
@@ -724,28 +759,12 @@ export function VoicePracticeScreen() {
       // --- 1. Audio and Repeat Controls ---
       if (parsed.type === 'control') {
         if (parsed.command === 'repeat') {
-          // Repeat ONLY the question text — no prefix, no question number, no options
-          const curQRepeat = questionsRef.current[currentIndexRef.current];
-          if (curQRepeat) {
-            stopSpeaking();
-            speakText(repeatQuestionTextOnly(curQRepeat), () => {
-              playBeacon('listening');
-              startVoiceListening();
-            });
-          }
+          repeatQuestionAloud();
           return true;
         }
 
         if (parsed.command === 'repeat_options') {
-          // Repeat ONLY the options — no "The options are:" prefix
-          const curQOpts = questionsRef.current[currentIndexRef.current];
-          if (curQOpts) {
-            stopSpeaking();
-            speakText(repeatOptionsTextOnly(curQOpts), () => {
-              playBeacon('listening');
-              startVoiceListening();
-            });
-          }
+          repeatOptionsAloud();
           return true;
         }
 

@@ -26,7 +26,14 @@ export type { User, AccessibilitySettings };
 import { audioBeacon } from '../utils/audioBeacon.ts';
 import { NavigationController } from '../voice/NavigationController.ts';
 import { NavigationContext } from '../voice/commandTypes.ts';
-import { VoiceEngine } from '../voice/VoiceEngine.ts';
+import {
+  VoiceEngine,
+  VoiceAssistantState,
+  VOICE_STATE_UI_MESSAGES,
+  getVoiceStateMessage
+} from '../voice/VoiceEngine.ts';
+export type { VoiceAssistantState };
+export { VOICE_STATE_UI_MESSAGES, getVoiceStateMessage };
 import { AccessibilityModeSelectorModal } from '../components/accessibility/AccessibilityModeSelectorModal.tsx';
 import { resolveNavigationShortcut } from '../services/shortcutRegistry.ts';
 import { getPageHelp } from '../data/pageHelpRegistry.ts';
@@ -37,7 +44,6 @@ export type AccessibilityInteractionMode = 'unselected' | 'voice' | 'keyboard' |
 export type ThemeMode = 'default' | 'sapphire' | 'high-contrast-yellow' | 'monochrome' | 'soft-dark';
 export type FontSize = 'normal' | 'large' | 'xlarge' | 'xxlarge';
 export type FontFace = 'system' | 'hyperlegible' | 'opendyslexic' | 'verdana' | 'serif' | 'mono';
-export type VoiceAssistantState = 'idle' | 'listening' | 'processing' | 'responding';
 
 export interface AccessibilityContextType {
   currentScreen: ScreenId;
@@ -290,7 +296,7 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
     } catch {}
     return 'system';
   });
-  const [voiceAssistantState, setVoiceAssistantState] = useState<VoiceAssistantState>('idle');
+  const [voiceAssistantState, setVoiceAssistantState] = useState<VoiceAssistantState>('IDLE');
   const [capturedVoiceText, setCapturedVoiceText] = useState<string>('');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('accessprep_sidebar_collapsed') === 'true'; } catch { return false; }
@@ -403,10 +409,11 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
     setIsSpeaking(true);
     setIsPausedSpeaking(false);
 
-    // Keep microphone listening during TTS so the user can say "STOP" on ANY screen!
-    voiceEngineRef.current?.setSpeaking(true);
-
     const cleanT = text.replace(/<[^>]*>?/gm, '').trim();
+
+    // Keep microphone listening during TTS so the user can say "STOP" on ANY screen, while suppressing speaker echo
+    voiceEngineRef.current?.setSpeaking(true, cleanT);
+
     const utterance = new SpeechSynthesisUtterance(cleanT);
     activeUtteranceRef.current = utterance; // Prevent garbage collection
 
@@ -439,9 +446,8 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
       isSpeakingRef.current = false;
       setIsSpeaking(false);
 
-      // Speech finished: reset speaking state so full commands are accepted
+      // Speech finished: reset speaking state so continuous session automatically returns to LISTENING
       voiceEngineRef.current?.setSpeaking(false);
-      setVoiceAssistantState('idle');
       setCapturedVoiceText('');
 
       if (onEnd) {
@@ -457,8 +463,8 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
     utterance.onstart = () => {
       setIsSpeaking(true);
       isSpeakingRef.current = true;
-      voiceEngineRef.current?.setState('responding');
-      setVoiceAssistantState('responding');
+      voiceEngineRef.current?.setState('SPEAKING');
+      setVoiceAssistantState('SPEAKING');
     };
 
     // Chromium keep-alive: pulse pause/resume to prevent speech from stalling on long strings
@@ -609,13 +615,41 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
         },
         onStateChange: (state) => {
           setVoiceAssistantState(state);
-          if (state === 'listening') {
-            announce('Vision is listening. Speak your command, then say Stop listening.', 'polite');
-          } else if (state === 'processing') {
-            announce('Vision is processing your command.', 'polite');
-          } else if (state === 'idle') {
+          if (state === 'WAKE_DETECTED') {
+            announce('Vision activated', 'polite');
+          } else if (state === 'LISTENING') {
+            announce('Listening... Speak your command', 'polite');
+          } else if (state === 'PROCESSING') {
+            announce('Processing your command...', 'polite');
+          } else if (state === 'SPEAKING') {
+            announce('Vision is responding...', 'polite');
+          } else if (state === 'STOPPED') {
+            setCapturedVoiceText('');
+            announce('Voice assistant deactivated', 'polite');
+          } else if (state === 'ERROR') {
+            setCapturedVoiceText('');
+            announce('Voice recognition unavailable', 'assertive');
+          } else if (state === 'IDLE') {
             setCapturedVoiceText('');
           }
+        },
+        onWakeDetected: (hasAttachedCommand: boolean) => {
+          setIsVisionAssistantActive(true);
+          setIsBlindModeState(true);
+          try { localStorage.setItem('accessprep_blind_mode', 'true'); } catch {}
+          if (navControllerRef.current) {
+            navControllerRef.current.updateContext({ isVisionAssistantActive: true });
+          }
+          if (!hasAttachedCommand) {
+            speakText("Yes, I'm listening.");
+          }
+        },
+        onDeactivate: () => {
+          setIsVisionAssistantActive(false);
+          if (navControllerRef.current) {
+            navControllerRef.current.updateContext({ isVisionAssistantActive: false });
+          }
+          speakText('Voice assistant deactivated.');
         },
         onSpeechAccumulated: (text: string) => {
           setCapturedVoiceText(text);
@@ -638,7 +672,7 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
       });
     }
     return voiceEngineRef.current;
-  }, [executeVoiceCommand, stopSpeaking, announce]);
+  }, [executeVoiceCommand, stopSpeaking, speakText, announce]);
 
   // 6. Settings Management
   const updateSettings = useCallback((newSettings: Partial<AccessibilitySettings>) => {
@@ -675,51 +709,23 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
 
   const toggleBlindMode = useCallback(() => setIsBlindMode(!isBlindMode), [isBlindMode, setIsBlindMode]);
 
-  // 7. Vision Assistant Activation (Hey Vision response)
+  // 7. Vision Assistant Activation ("Hey Vision" response)
   const activateVisionAssistant = useCallback(() => {
     setIsVisionAssistantActive(true);
     setIsBlindMode(true);
-    audioBeacon.playSuccessBeacon();
 
     if (navControllerRef.current) {
       navControllerRef.current.updateContext({ isVisionAssistantActive: true });
     }
 
-    const h = new Date().getHours();
-    const time = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-    const firstName = (userRef.current?.name || '').split(' ')[0]?.replace(/[^\w]/g, '') || 'Candidate';
-
-    const welcome = `${time}, ${firstName}, welcome back! I am your Vision Assistant. ` +
-      `Here is what you can do. ` +
-      `Say "Start practice" or "Start exam" to begin voice practice questions. ` +
-      `Say "Mock exam" or "Mock test" for a full timed mock examination. ` +
-      `Say "AI tutor" or "Tutor" to ask any subject doubt. ` +
-      `Say "Revision planner" or "Tuition planner" to review flashcards. ` +
-      `Say "My progress" or "Analytics" to see your score trends. ` +
-      `Say "Topic mastery" to view your skill levels. ` +
-      `Say "Dashboard" or "Read dashboard" to return to the home screen. ` +
-      `Say "Subjects" to explore the SSC MTS syllabus. ` +
-      `Say "Screen reader settings" to adjust speech speed or pitch. ` +
-      `Keyboard shortcuts: Alt+D for Dashboard, Alt+P for Practice, Alt+E for Mock Exam, Alt+T for AI Tutor, Alt+R for Revision Planner, and Alt+Arrow keys to move between screens. ` +
-      `On any page, say "Stop" to stop reading and start listening. ` +
-      `What would you like to do?`;
-
-    announce(welcome, 'assertive');
-    speakText(welcome, () => {
-      getEngine().triggerWakeWordActivation();
-    });
-  }, [setIsBlindMode, announce, speakText, getEngine]);
+    const engine = getEngine();
+    engine.start();
+    engine.triggerWakeWordActivation(true);
+  }, [setIsBlindMode, getEngine]);
 
   const deactivateVisionAssistant = useCallback(() => {
-    setIsVisionAssistantActive(false);
-    if (navControllerRef.current) {
-      navControllerRef.current.updateContext({ isVisionAssistantActive: false });
-    }
-    getEngine().stop();
-    audioBeacon.playAlertBeacon();
-    announce('Vision Assistant deactivated.', 'polite');
-    speakText('Vision Assistant deactivated.');
-  }, [announce, speakText, getEngine]);
+    getEngine().deactivateSession();
+  }, [getEngine]);
 
   // 8. Voice listening triggers
   const startVoiceListening = useCallback(() => {
@@ -727,7 +733,9 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
     if (navControllerRef.current) {
       navControllerRef.current.updateContext({ isVisionAssistantActive: true });
     }
-    getEngine().triggerWakeWordActivation();
+    const engine = getEngine();
+    engine.start();
+    engine.triggerWakeWordActivation(false);
   }, [getEngine]);
 
   const stopVoiceListening = useCallback(() => {
@@ -1118,7 +1126,7 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
         // Alt+Space: Toggle/Activate Vision Assistant (Hey Vision / Stop listening)
         if (e.code === 'Space' || e.key === ' ') {
           e.preventDefault();
-          if (voiceAssistantState === 'listening') {
+          if (voiceAssistantState === 'LISTENING' || voiceAssistantState === 'WAKE_DETECTED') {
             getEngine().triggerStopListening();
           } else {
             activateVisionAssistant();
@@ -1193,13 +1201,13 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [navigateTo, logout, stopSpeaking, activateVisionAssistant, deactivateVisionAssistant, setIsBlindMode, isBlindMode, announce, selectInteractionMode, speakText]);
 
-  // 18. Always-on Microphone: Starts and stays listening after candidate clicks anywhere on screen
+  // 18. Ensure background microphone wake-word standby runs after candidate interaction
   useEffect(() => {
     const handleScreenClickOrTouch = () => {
       if (interactionModeRef.current !== 'manual') {
-        const engine = voiceEngineRef.current;
-        if (!engine || !engine.isListening()) {
-          startVoiceListening();
+        const engine = getEngine();
+        if (!engine.isRecognitionRunning() && engine.getState() !== 'ERROR') {
+          engine.start();
         }
       }
     };
@@ -1213,7 +1221,7 @@ export function AccessibilityProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('pointerdown', handleScreenClickOrTouch, { capture: true });
       window.removeEventListener('touchstart', handleScreenClickOrTouch, { capture: true });
     };
-  }, [startVoiceListening]);
+  }, [getEngine]);
 
   // Computed properties
   const theme = (settings.theme === 'sapphire' ? 'default' : settings.theme) as ThemeMode;

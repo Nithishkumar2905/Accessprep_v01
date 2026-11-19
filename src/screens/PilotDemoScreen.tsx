@@ -50,7 +50,10 @@ import {
   formatAllOptionsPrompt,
   formatSingleOptionPrompt,
   repeatQuestionTextOnly,
-  repeatOptionsTextOnly
+  repeatOptionsTextOnly,
+  repeatCurrentQuestion,
+  repeatCurrentOptions,
+  repeatIndividualOption
 } from '../utils/repeatQuestionHelper.ts';
 import {
   AcceptanceStatus,
@@ -865,30 +868,52 @@ export function PilotDemoScreen() {
 
   const currentQ = questions[currentIdx];
 
+  const repeatQuestionAloud = useCallback(
+    (q: Question) => {
+      if (!q) return;
+      repeatCurrentQuestion(q, {
+        stopSpeaking,
+        speakText,
+        announce,
+        onPlaybackEnd: () => {
+          playBeacon('listening');
+          startVoiceListening();
+        }
+      });
+    },
+    [stopSpeaking, speakText, announce, playBeacon, startVoiceListening]
+  );
+
   const repeatOptionsAloud = useCallback(
     (q: Question) => {
       if (!q) return;
-      const prompt = formatAllOptionsPrompt(q);
-      announce('Reading options A through D', 'polite');
-      speakText(prompt, () => {
-        playBeacon('listening');
-        startVoiceListening();
+      repeatCurrentOptions(q, {
+        stopSpeaking,
+        speakText,
+        announce,
+        onPlaybackEnd: () => {
+          playBeacon('listening');
+          startVoiceListening();
+        }
       });
     },
-    [announce, speakText, playBeacon, startVoiceListening]
+    [stopSpeaking, announce, speakText, playBeacon, startVoiceListening]
   );
 
   const repeatSingleOptionAloud = useCallback(
     (q: Question, opt: 'A' | 'B' | 'C' | 'D') => {
       if (!q) return;
-      const prompt = formatSingleOptionPrompt(q, opt);
-      announce(`Reading Option ${opt}`, 'polite');
-      speakText(prompt, () => {
-        playBeacon('listening');
-        startVoiceListening();
+      repeatIndividualOption(opt, q, {
+        stopSpeaking,
+        speakText,
+        announce,
+        onPlaybackEnd: () => {
+          playBeacon('listening');
+          startVoiceListening();
+        }
       });
     },
-    [announce, speakText, playBeacon, startVoiceListening]
+    [stopSpeaking, announce, speakText, playBeacon, startVoiceListening]
   );
 
   // Automatically read question aloud in Blind Mode or when autoReadAloud is enabled
@@ -1277,16 +1302,27 @@ export function PilotDemoScreen() {
         }
 
         // Direct voice commands requested in specification
-        if (clean === 'read question' || clean === 'repeat question' || clean === 'repeat the question') {
-          // Repeat ONLY the question text — no prefix, no question number, no options
-          stopSpeaking();
-          speakText(repeatQuestionTextOnly(q));
+        if (
+          clean === 'read question' ||
+          clean === 'repeat question' ||
+          clean === 'repeat the question' ||
+          clean === 'read question again' ||
+          clean === 'read the question again'
+        ) {
+          repeatQuestionAloud(q);
           return true;
         }
-        if (clean === 'repeat options' || clean === 'read options') {
-          // Repeat ONLY the options — no "The options are:" prefix
-          stopSpeaking();
-          speakText(repeatOptionsTextOnly(q));
+        if (
+          clean === 'repeat option' ||
+          clean === 'repeat options' ||
+          clean === 'read option' ||
+          clean === 'read options' ||
+          clean === 'read options again' ||
+          clean === 'read the options again' ||
+          clean === 'repeat answer choices' ||
+          clean === 'read answer choices'
+        ) {
+          repeatOptionsAloud(q);
           return true;
         }
         if (clean === 'explain this question' || clean === 'explain question') {
@@ -1362,7 +1398,7 @@ export function PilotDemoScreen() {
           if (parsed.type === 'control') {
             switch (parsed.command) {
               case 'repeat':
-                readQuestionAloud(q, currentIdxRef.current, questionsRef.current.length);
+                repeatQuestionAloud(q);
                 return true;
               case 'repeat_options':
                 repeatOptionsAloud(q);

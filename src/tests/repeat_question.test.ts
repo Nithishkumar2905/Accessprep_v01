@@ -6,17 +6,21 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAnswer } from '../utils/answerParser.ts';
+import { parseAnswer, parseSpokenAnswer } from '../utils/answerParser.ts';
 import {
   formatFullQuestionPrompt,
   formatQuestionStemOnly,
   formatAllOptionsPrompt,
   formatSingleOptionPrompt,
   formatFlashcardQuestionPrompt,
-  formatFlashcardAnswerPrompt
+  formatFlashcardAnswerPrompt,
+  repeatCurrentQuestion,
+  repeatCurrentOptions,
+  repeatIndividualOption
 } from '../utils/repeatQuestionHelper.ts';
-import { parseSystemControl } from '../voice/commandParser.ts';
+import { parseSystemControl, parseSubjectSelectionIntent } from '../voice/commandParser.ts';
 import { NavigationController } from '../voice/NavigationController.ts';
+import { VoiceEngine } from '../voice/VoiceEngine.ts';
 import type { Question } from '../db/database.ts';
 
 // ---------------------------------------------------------------------------
@@ -128,23 +132,37 @@ test('AnswerParser: parses repeat question voice variants to "repeat"', () => {
   assert.equal(parseAnswer('say question again'), 'repeat');
 });
 
-test('AnswerParser: parses repeat options voice variants to "repeat_options"', () => {
+test('AnswerParser: parses repeat options voice variants (including singular "Repeat Option" and "Repeat Answer Choices") to "repeat_options"', () => {
+  assert.equal(parseAnswer('repeat option'), 'repeat_options');
   assert.equal(parseAnswer('repeat options'), 'repeat_options');
+  assert.equal(parseAnswer('repeat the option'), 'repeat_options');
   assert.equal(parseAnswer('repeat the options'), 'repeat_options');
+  assert.equal(parseAnswer('read option'), 'repeat_options');
   assert.equal(parseAnswer('read options'), 'repeat_options');
+  assert.equal(parseAnswer('read options again'), 'repeat_options');
   assert.equal(parseAnswer('read the options again'), 'repeat_options');
+  assert.equal(parseAnswer('repeat answer choices'), 'repeat_options');
+  assert.equal(parseAnswer('read answer choices'), 'repeat_options');
   assert.equal(parseAnswer('what are the options'), 'repeat_options');
   assert.equal(parseAnswer('read the choices'), 'repeat_options');
   assert.equal(parseAnswer('repeat choices'), 'repeat_options');
 });
 
-test('AnswerParser: parses specific option repeats (A, B, C, D)', () => {
+test('AnswerParser: parses specific option repeats (A, B, C, D) including "What is option A?", "Read answer choice C", "Repeat choice D"', () => {
   assert.equal(parseAnswer('repeat option a'), 'repeat_option_a');
   assert.equal(parseAnswer('repeat option b'), 'repeat_option_b');
   assert.equal(parseAnswer('repeat option c'), 'repeat_option_c');
   assert.equal(parseAnswer('repeat option d'), 'repeat_option_d');
 
   assert.equal(parseAnswer('read option a'), 'repeat_option_a');
+  assert.equal(parseAnswer('read option b'), 'repeat_option_b');
+  assert.equal(parseAnswer('read option c'), 'repeat_option_c');
+  assert.equal(parseAnswer('read option d'), 'repeat_option_d');
+
+  assert.equal(parseAnswer('what is option a?'), 'repeat_option_a');
+  assert.equal(parseAnswer('read answer choice c.'), 'repeat_option_c');
+  assert.equal(parseAnswer('repeat choice d.'), 'repeat_option_d');
+  assert.equal(parseAnswer('repeat answer choice b'), 'repeat_option_b');
   assert.equal(parseAnswer('read choice b'), 'repeat_option_b');
   assert.equal(parseAnswer('what is option c'), 'repeat_option_c');
   assert.equal(parseAnswer('repeat choice d'), 'repeat_option_d');
@@ -260,4 +278,258 @@ test('Exam Safety: repeating a question does not mutate state or timer', () => {
   assert.equal(examState.secondsRemaining, 1800, 'Timer must not be modified');
   assert.equal(examState.currentIndex, 4, 'Current question index must not advance');
   assert.equal(Object.keys(examState.answers).length, 4, 'Answers record must remain untouched');
+});
+
+// ---------------------------------------------------------------------------
+// 5. Centralized Repeat Functions, TTS Interruption, Math Speech & Isolation
+// ---------------------------------------------------------------------------
+
+const capitalQuestion: Question = {
+  ...mockQuestion,
+  question_id: 'Q_CAP_05',
+  subject: 'General Awareness',
+  topic: 'Geography',
+  question_text: 'What is the capital of India?',
+  option_a: 'Mumbai',
+  option_b: 'New Delhi',
+  option_c: 'Chennai',
+  option_d: 'Kolkata',
+  correct_answer: 'B'
+};
+
+test('Centralized Repeat Functions: repeatCurrentQuestion, repeatCurrentOptions, and repeatIndividualOption', () => {
+  const spokenOutputs: string[] = [];
+  const announcements: string[] = [];
+  let stopCalledCount = 0;
+  let playbackEndCount = 0;
+
+  const callbacks = {
+    stopSpeaking: () => {
+      stopCalledCount++;
+    },
+    announce: (msg: string) => {
+      announcements.push(msg);
+    },
+    speakText: (text: string, onEnd?: () => void) => {
+      spokenOutputs.push(text);
+      onEnd?.();
+    },
+    onPlaybackEnd: () => {
+      playbackEndCount++;
+    }
+  };
+
+  // 1. Repeat Question (multiple times)
+  const qOut1 = repeatCurrentQuestion(() => capitalQuestion, callbacks);
+  const qOut2 = repeatCurrentQuestion(() => capitalQuestion, callbacks);
+  assert.equal(qOut1, 'What is the capital of India?');
+  assert.equal(qOut2, 'What is the capital of India?');
+  assert.equal(announcements[0], 'Repeating Question...');
+
+  // 2. Repeat Options (multiple times)
+  const optOut1 = repeatCurrentOptions(() => capitalQuestion, callbacks);
+  const optOut2 = repeatCurrentOptions(() => capitalQuestion, callbacks);
+  assert.equal(
+    optOut1,
+    'Option A: Mumbai. Option B: New Delhi. Option C: Chennai. Option D: Kolkata.'
+  );
+  assert.equal(optOut1, optOut2);
+  assert.ok(announcements.includes('Reading Answer Options...'));
+
+  // 3. Individual Option Reading (A, B, C, D)
+  const optA = repeatIndividualOption('A', () => capitalQuestion, callbacks);
+  const optB = repeatIndividualOption('B', () => capitalQuestion, callbacks);
+  const optC = repeatIndividualOption('C', () => capitalQuestion, callbacks);
+  const optD = repeatIndividualOption('D', () => capitalQuestion, callbacks);
+
+  assert.equal(optA, 'Option A: Mumbai.');
+  assert.equal(optB, 'Option B: New Delhi.');
+  assert.equal(optC, 'Option C: Chennai.');
+  assert.equal(optD, 'Option D: Kolkata.');
+  assert.ok(announcements.includes('Reading Option B...'));
+  assert.equal(stopCalledCount, 8, 'Must cancel previous TTS playback on every repeat call');
+  assert.equal(playbackEndCount, 8, 'Must return to listening state after each TTS playback completes');
+});
+
+test('Repeat Mathematical & Long Questions: Spoken representations of math expressions and long stems without truncation', () => {
+  const mathQ: Question = {
+    ...mockQuestion,
+    question_id: 'Q_MATH_99',
+    subject: 'Numerical and Mathematical Ability',
+    topic: 'Algebra & Simplification',
+    question_text: 'If 2x + 5 = 15, find the value of √144 + 25% of 200 and ratio 3 : 4.',
+    option_a: '12 × 5',
+    option_b: '36 ÷ 6',
+    option_c: 'x^2 + 3',
+    option_d: '\\frac{3}{4}'
+  };
+
+  const qSpoken = repeatCurrentQuestion(mathQ);
+  assert.ok(qSpoken.includes('2 times x plus 5 equals 15'), `Unexpected math speech: ${qSpoken}`);
+  assert.ok(qSpoken.includes('square root of 144'), `Missing square root speech: ${qSpoken}`);
+  assert.ok(qSpoken.includes('25 percent of 200'), `Missing percentage speech: ${qSpoken}`);
+  assert.ok(qSpoken.includes('3 is to 4'), `Missing ratio speech: ${qSpoken}`);
+
+  const optASpoken = repeatIndividualOption('A', mathQ);
+  const optBSpoken = repeatIndividualOption('B', mathQ);
+  const optCSpoken = repeatIndividualOption('C', mathQ);
+  const optDSpoken = repeatIndividualOption('D', mathQ);
+
+  assert.ok(optASpoken.includes('12 times 5'), `Unexpected Option A speech: ${optASpoken}`);
+  assert.ok(optBSpoken.includes('36 divided by 6'), `Unexpected Option B speech: ${optBSpoken}`);
+  assert.ok(optCSpoken.includes('x squared plus 3'), `Unexpected Option C speech: ${optCSpoken}`);
+  assert.ok(optDSpoken.includes('3 divided by 4'), `Unexpected Option D speech: ${optDSpoken}`);
+
+  // Long question test (no truncation)
+  const longStem =
+    'In a comprehensive multi-stage Staff Selection Commission Multi-Tasking Staff examination scenario, ' +
+    'a candidate travels from New Delhi to Mumbai covering 1400 kilometers at a constant speed, ' +
+    'and then continues to Chennai covering an additional 1300 kilometers. ' +
+    'What is the total distance travelled by the candidate across both segments of the journey?';
+  const longQ: Question = {
+    ...mockQuestion,
+    question_text: longStem
+  };
+  const longSpoken = repeatCurrentQuestion(longQ);
+  assert.equal(longSpoken, longStem);
+});
+
+test('VoiceEngine Barge-In & End-to-End Repeat Flow: Repeat while TTS is playing, preserve selected answer, and isolate Pilot Demo vs Mock Exam', async () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const pilotQuestion: Question = {
+    ...capitalQuestion,
+    question_id: 'PD_Q1',
+    question_text: 'What is the capital of India?'
+  };
+
+  const mockExamQuestion: Question = {
+    ...mockQuestion,
+    question_id: 'ME_Q1',
+    question_text: 'What is the LCM of 12 and 18?'
+  };
+
+  let activeModule: 'pilot_demo' | 'mock_exam' = 'pilot_demo';
+  let selectedAnswer: string | null = null;
+  let stopSpeakingCount = 0;
+  const spokenHistory: string[] = [];
+
+  const screenVoiceHandler = (transcript: string): boolean => {
+    const activeQ = activeModule === 'pilot_demo' ? pilotQuestion : mockExamQuestion;
+    const parsed = parseSpokenAnswer(transcript, {
+      A: activeQ.option_a,
+      B: activeQ.option_b,
+      C: activeQ.option_c,
+      D: activeQ.option_d
+    });
+    if (!parsed) return false;
+
+    const cb = {
+      stopSpeaking: () => {
+        stopSpeakingCount++;
+      },
+      speakText: (txt: string, onEnd?: () => void) => {
+        spokenHistory.push(txt);
+        onEnd?.();
+      }
+    };
+
+    if (parsed.type === 'control') {
+      if (parsed.command === 'repeat') {
+        repeatCurrentQuestion(activeQ, cb);
+        return true;
+      }
+      if (parsed.command === 'repeat_options') {
+        repeatCurrentOptions(activeQ, cb);
+        return true;
+      }
+      if (parsed.command === 'repeat_option_a') {
+        repeatIndividualOption('A', activeQ, cb);
+        return true;
+      }
+      if (parsed.command === 'repeat_option_b') {
+        repeatIndividualOption('B', activeQ, cb);
+        return true;
+      }
+      if (parsed.command === 'repeat_option_c') {
+        repeatIndividualOption('C', activeQ, cb);
+        return true;
+      }
+      if (parsed.command === 'repeat_option_d') {
+        repeatIndividualOption('D', activeQ, cb);
+        return true;
+      }
+    }
+
+    if (parsed.type === 'option') {
+      selectedAnswer = parsed.option;
+      return true;
+    }
+
+    return false;
+  };
+
+  const engine = new VoiceEngine({
+    lang: 'en-IN',
+    silenceTimeoutMs: 25,
+    onTranscript: async (text) => {
+      screenVoiceHandler(text);
+    },
+    onStopSpeaking: () => {
+      stopSpeakingCount++;
+    },
+    onListeningChange: () => {}
+  });
+
+  // 1. Wake up
+  engine.handleSpeechTranscript('Hey Vision');
+  assert.equal(engine.getState(), 'LISTENING');
+
+  // 2. Simulate TTS currently reading a question, and user barges in with "Repeat Question"
+  engine.setSpeaking(true, 'Question 1 of 20. What is the capital of India? Option A: Mumbai...');
+  engine.handleSpeechTranscript('Repeat Question');
+  await sleep(50);
+
+  assert.ok(stopSpeakingCount >= 1, 'Ongoing TTS must be cancelled when Repeat Question is spoken');
+  assert.equal(spokenHistory[spokenHistory.length - 1], 'What is the capital of India?');
+  assert.equal(engine.getState(), 'LISTENING');
+
+  // 3. User says "Repeat Option" (singular) while in Pilot Demo
+  engine.handleSpeechTranscript('Repeat Option');
+  await sleep(50);
+  assert.equal(
+    spokenHistory[spokenHistory.length - 1],
+    'Option A: Mumbai. Option B: New Delhi. Option C: Chennai. Option D: Kolkata.'
+  );
+
+  // 4. User says "Repeat Option B"
+  engine.handleSpeechTranscript('Repeat Option B');
+  await sleep(50);
+  assert.equal(spokenHistory[spokenHistory.length - 1], 'Option B: New Delhi.');
+  assert.equal(selectedAnswer, null, 'Repeating an option must NOT select it as the answer');
+
+  // 5. User selects Option C, then repeats question & options -> selectedAnswer must stay 'C'
+  engine.handleSpeechTranscript('Option C');
+  await sleep(50);
+  assert.equal(selectedAnswer, 'C');
+
+  engine.handleSpeechTranscript('Read question again');
+  await sleep(50);
+  assert.equal(spokenHistory[spokenHistory.length - 1], 'What is the capital of India?');
+  assert.equal(selectedAnswer, 'C', 'Selected answer must remain unchanged after Repeat Question');
+
+  engine.handleSpeechTranscript('Read answer choice D');
+  await sleep(50);
+  assert.equal(spokenHistory[spokenHistory.length - 1], 'Option D: Kolkata.');
+  assert.equal(selectedAnswer, 'C', 'Selected answer must remain unchanged after reading Option D');
+
+  // 6. Switch active context to Mock Examination -> Repeat Question must read Mock Exam question
+  activeModule = 'mock_exam';
+  engine.handleSpeechTranscript('Repeat the question');
+  await sleep(50);
+  assert.equal(spokenHistory[spokenHistory.length - 1], 'What is the LCM of 12 and 18?');
+
+  // 7. Ensure "Read all options" does not trigger subject selection in Voice Practice
+  assert.equal(parseSubjectSelectionIntent('read all options'), null);
+  assert.equal(parseSubjectSelectionIntent('repeat all options'), null);
 });

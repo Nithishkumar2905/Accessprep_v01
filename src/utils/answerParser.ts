@@ -47,12 +47,17 @@ export function parseSpokenAnswer(transcript: string, options?: QuestionOptions)
   if (!transcript) return null;
   const clean = cleanString(transcript);
 
-  // 1. Specific Option Repeat Commands
+  // 1. Specific Individual Option Repeat Commands (A, B, C, D)
+  // Examples: "Repeat Option A", "Read Option B", "What is option A?", "Read answer choice C", "Repeat choice D", "Option B again"
   const optMatch =
-    clean.match(/\b(repeat|read|what is|say)\s+(the\s+)?(option|choice)\s+([a-d])\b/) ||
-    clean.match(/\b(option|choice)\s+([a-d])\s+(again|repeat)\b/);
-  if (optMatch) {
-    const optLetter = (optMatch[4] || optMatch[2]).toLowerCase();
+    clean.match(
+      /\b(?:repeat|read|what\s+is|what\s+does|say|tell\s+me|speak|hear|listen\s+to|replay)\s+(?:the\s+)?(?:answer\s+)?(?:option|choice)\s+([a-d])\b/
+    ) ||
+    clean.match(
+      /\b(?:answer\s+)?(?:option|choice)\s+([a-d])\s+(?:again|repeat|aloud)\b/
+    );
+  if (optMatch && optMatch[1]) {
+    const optLetter = optMatch[1].toLowerCase();
     return { type: 'control', command: `repeat_option_${optLetter}` as any };
   }
 
@@ -61,8 +66,13 @@ export function parseSpokenAnswer(transcript: string, options?: QuestionOptions)
     clean === 'read option a' ||
     clean === 'repeat choice a' ||
     clean === 'read choice a' ||
+    clean === 'repeat answer choice a' ||
+    clean === 'read answer choice a' ||
     clean === 'what is option a' ||
-    clean === 'option a again'
+    clean === 'what is choice a' ||
+    clean === 'what is answer choice a' ||
+    clean === 'option a again' ||
+    clean === 'choice a again'
   ) {
     return { type: 'control', command: 'repeat_option_a' };
   }
@@ -72,8 +82,13 @@ export function parseSpokenAnswer(transcript: string, options?: QuestionOptions)
     clean === 'read option b' ||
     clean === 'repeat choice b' ||
     clean === 'read choice b' ||
+    clean === 'repeat answer choice b' ||
+    clean === 'read answer choice b' ||
     clean === 'what is option b' ||
-    clean === 'option b again'
+    clean === 'what is choice b' ||
+    clean === 'what is answer choice b' ||
+    clean === 'option b again' ||
+    clean === 'choice b again'
   ) {
     return { type: 'control', command: 'repeat_option_b' };
   }
@@ -83,8 +98,13 @@ export function parseSpokenAnswer(transcript: string, options?: QuestionOptions)
     clean === 'read option c' ||
     clean === 'repeat choice c' ||
     clean === 'read choice c' ||
+    clean === 'repeat answer choice c' ||
+    clean === 'read answer choice c' ||
     clean === 'what is option c' ||
-    clean === 'option c again'
+    clean === 'what is choice c' ||
+    clean === 'what is answer choice c' ||
+    clean === 'option c again' ||
+    clean === 'choice c again'
   ) {
     return { type: 'control', command: 'repeat_option_c' };
   }
@@ -94,49 +114,88 @@ export function parseSpokenAnswer(transcript: string, options?: QuestionOptions)
     clean === 'read option d' ||
     clean === 'repeat choice d' ||
     clean === 'read choice d' ||
+    clean === 'repeat answer choice d' ||
+    clean === 'read answer choice d' ||
     clean === 'what is option d' ||
-    clean === 'option d again'
+    clean === 'what is choice d' ||
+    clean === 'what is answer choice d' ||
+    clean === 'option d again' ||
+    clean === 'choice d again'
   ) {
     return { type: 'control', command: 'repeat_option_d' };
   }
 
-  // 2. All Options Repeat Commands
+  // 2. All Options Repeat Commands ("Repeat Option", "Repeat Options", "Read Options Again", "Repeat Answer Choices")
   if (
+    clean === 'repeat option' ||
     clean === 'repeat options' ||
+    clean === 'repeat the option' ||
     clean === 'repeat the options' ||
+    clean === 'read option' ||
     clean === 'read options' ||
+    clean === 'read the option' ||
     clean === 'read the options' ||
+    clean === 'read option again' ||
+    clean === 'read options again' ||
     clean === 'read the options again' ||
+    clean === 'repeat option again' ||
+    clean === 'repeat options again' ||
+    clean === 'repeat answer choices' ||
+    clean === 'repeat the answer choices' ||
+    clean === 'read answer choices' ||
+    clean === 'read the answer choices' ||
+    clean === 'read answer choices again' ||
+    clean === 'repeat answer choices again' ||
+    clean === 'repeat answer options' ||
+    clean === 'read answer options' ||
+    clean === 'repeat all options' ||
+    clean === 'read all options' ||
+    clean === 'repeat all choices' ||
+    clean === 'read all choices' ||
     clean === 'what are the options' ||
+    clean === 'what are the choices' ||
+    clean === 'what are the answer choices' ||
     clean === 'list options' ||
     clean === 'options again' ||
+    clean === 'choices again' ||
+    clean === 'answer choices again' ||
     clean === 'read choices' ||
     clean === 'read the choices' ||
     clean === 'repeat choices' ||
     clean === 'repeat the choices' ||
-    /\b(repeat|read|what are)\s+(the\s+)?(options|choices)\b/.test(clean)
+    /\b(?:repeat|read|what\s+are|say|replay|list)\s+(?:all\s+)?(?:the\s+)?(?:answer\s+)?(?:options|choices|option|choice)\b/.test(
+      clean
+    )
   ) {
     return { type: 'control', command: 'repeat_options' };
   }
 
-  // 3. Question Repeat Commands (Full Question + Options or Stem)
+  // 3. Question Repeat Commands ("Repeat Question", "Repeat the Question", "Read Question Again")
   if (
     clean === 'repeat question' ||
     clean === 'repeat the question' ||
     clean === 'read question again' ||
     clean === 'read the question again' ||
+    clean === 'repeat question again' ||
     clean === 'read the prompt again' ||
+    clean === 'read prompt again' ||
     clean === 'read question' ||
+    clean === 'read the question' ||
     clean === 'read prompt' ||
     clean === 'repeat prompt' ||
     clean === 'what was the question' ||
     clean === 'what is the question' ||
     clean === 'say question again' ||
+    clean === 'say the question again' ||
+    clean === 'replay question' ||
+    clean === 'replay the question' ||
     clean === 'repeat' ||
     clean === 'read again' ||
     clean === 'say again' ||
     clean === 'say that again' ||
-    /\b(repeat|read|say|what is|what was)\s+(the\s+)?(question|prompt)\b/.test(clean)
+    /\b(?:repeat|read|say|replay|what\s+is|what\s+was)\s+(?:the\s+)?(?:current\s+)?(?:question|prompt)\b/.test(
+      clean
+    )
   ) {
     return { type: 'control', command: 'repeat' };
   }

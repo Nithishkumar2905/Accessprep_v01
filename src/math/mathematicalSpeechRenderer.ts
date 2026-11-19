@@ -527,6 +527,19 @@ export function renderTextWithMathToSpeech(text: string): string {
     return r.isReliable ? r.spoken : 'a mathematical expression that needs clarification';
   });
 
+  // Pre-normalize inline Unicode math symbols (√, ∛, ×, ÷, ², ³) and LaTeX (\times, \div)
+  work = work
+    .replace(/√\s*\(([^)]+)\)/g, 'sqrt($1)')
+    .replace(/√\s*([0-9]+(?:\.[0-9]+)?|[a-zA-Z]+)/g, 'sqrt($1)')
+    .replace(/∛\s*\(([^)]+)\)/g, 'cbrt($1)')
+    .replace(/∛\s*([0-9]+(?:\.[0-9]+)?|[a-zA-Z]+)/g, 'cbrt($1)')
+    .replace(/×|\\times\b/g, ' * ')
+    .replace(/÷|\\div\b/g, ' / ')
+    .replace(/(\w)²/g, '$1^2')
+    .replace(/(\w)³/g, '$1^3')
+    .replace(/\)\s*²/g, ')^2')
+    .replace(/\)\s*³/g, ')^3');
+
   work = work.replace(/(\d+\.\d+)\.{3}/g, '$1 repeating');
   work = work.replace(/\.{3}/g, ' and so on ');
 
@@ -578,6 +591,9 @@ export function renderTextWithMathToSpeech(text: string): string {
     .replace(/ \* /g, ' times ')
     .replace(/ \/ /g, ' divided by ')
     .replace(/\b(\d+(?:\.\d+)?)\s*%/g, '$1 percent')
+    .replace(/\bsqrt\s*\(([^()]*)\)/gi, (_, arg) => `square root of ${arg.trim()}`)
+    .replace(/\bcbrt\s*\(([^()]*)\)/gi, (_, arg) => `cube root of ${arg.trim()}`)
+    .replace(/\b(\d+)\s*:\s*(\d+)\b(?!\s*(?:am|pm|a\.m\.|p\.m\.))/gi, '$1 is to $2')
     .replace(/(\w)_(\w)/g, '$1 $2')
     .replace(/\b(LCM|HCF|GCD)\s*\(([^)]*)\)/gi, (_, fn, args) => `${fn.toUpperCase().split('').join(' ')} of ${args}`);
 

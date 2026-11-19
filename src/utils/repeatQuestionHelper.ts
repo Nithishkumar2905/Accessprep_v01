@@ -14,23 +14,28 @@ import {
   formatReasoningOptionSpeech
 } from './reasoningSpeechFormatter.ts';
 
-/** Only mathematical subjects are rewritten; other subjects are spoken verbatim as before. */
-function isMathSubject(subject?: string): boolean {
-  return /numerical|reasoning/i.test(subject || '');
+/** Mathematical subjects or any text containing explicit mathematical expressions/symbols are rendered into spoken math. */
+function shouldRenderMath(text: string, subject?: string): boolean {
+  if (/numerical|math|quantitative|reasoning|aptitude/i.test(subject || '')) {
+    return true;
+  }
+  return /(?:\\frac|\\sqrt|[√∛×÷²³≠≥≤]|\b(?:sqrt|cbrt|LCM|HCF|GCD)\s*\(|\b[a-zA-Z0-9]+\^[a-zA-Z0-9]+|\b\d+(?:\.\d+)?\s*(?:[+*/^=:]|%\s+of)\s*\d+|\b\d+(?:\.\d+)?\s*-\s*\d+|\b\d+(?:\.\d+)?%)/i.test(
+    text || ''
+  );
 }
 
 /** Speech-safe version of any text belonging to a question of the given subject. */
 export function speakableQuestionText(text: string, subject?: string, topic?: string): string {
   if (!text) return '';
-  // Apply math rendering first for numerical subjects, then reasoning speech formatting
-  const afterMath = isMathSubject(subject) ? renderTextWithMathToSpeech(text) : text;
+  // Apply math rendering first for numerical/mathematical expressions, then reasoning speech formatting
+  const afterMath = shouldRenderMath(text, subject) ? renderTextWithMathToSpeech(text) : text;
   return formatReasoningQuestionSpeech(afterMath, subject, topic);
 }
 
 /** Speech for a single option (e.g. "7/9", "x^2", "3 : 2", "4% increase"). Plain words pass through unchanged. */
 export function speakableOptionText(text: string, subject?: string, topic?: string, questionText?: string): string {
   if (!text) return '';
-  const afterMath = isMathSubject(subject) ? renderTextWithMathToSpeech(text) : text;
+  const afterMath = shouldRenderMath(text, subject) ? renderTextWithMathToSpeech(text) : text;
   return formatReasoningOptionSpeech(afterMath, subject, topic, questionText);
 }
 
@@ -149,4 +154,105 @@ export function formatFlashcardAnswerPrompt(card: {
 }): string {
   const cleanExp = card.explanation.trim().replace(/\.+$/, '');
   return `Answer: ${speakableOptionText(card.correctAnswer, card.subject)}. Explanation: ${speakableQuestionText(cleanExp, card.subject)}.`;
+}
+
+/**
+ * Formats all four answer choices in their original order with full "Option A..D" labels:
+ * "Option A: [A]. Option B: [B]. Option C: [C]. Option D: [D]."
+ */
+export function formatOptionsWithLabels(q: Question): string {
+  const o = optionsOf(q);
+  const parts: string[] = [];
+  if (o.A) parts.push(`Option A: ${o.A}`);
+  if (o.B) parts.push(`Option B: ${o.B}`);
+  if (o.C) parts.push(`Option C: ${o.C}`);
+  if (o.D) parts.push(`Option D: ${o.D}`);
+  return parts.length > 0 ? parts.join('. ') + '.' : '';
+}
+
+export interface RepeatExecutionCallbacks {
+  stopSpeaking?: () => void;
+  speakText?: (text: string, onEnd?: () => void) => void;
+  announce?: (message: string, priority?: 'polite' | 'assertive') => void;
+  onPlaybackEnd?: () => void;
+  onStatusMessage?: (status: string) => void;
+}
+
+/**
+ * Centralized function to repeat the currently active question from the beginning.
+ * Cancels ongoing playback, provides accessible visual/screen-reader feedback ("Repeating Question..."),
+ * speaks the complete question text via TTS, and returns to listening upon completion.
+ */
+export function repeatCurrentQuestion(
+  questionOrGetter: Question | null | undefined | (() => Question | null | undefined),
+  callbacks?: RepeatExecutionCallbacks
+): string {
+  const q = typeof questionOrGetter === 'function' ? questionOrGetter() : questionOrGetter;
+  if (!q || !q.question_text) return '';
+
+  const text = repeatQuestionTextOnly(q).trim();
+  if (!text) return '';
+  const spoken = /[.?!]$/.test(text) ? text : `${text}.`;
+
+  callbacks?.stopSpeaking?.();
+  callbacks?.onStatusMessage?.('Repeating Question...');
+  callbacks?.announce?.('Repeating Question...', 'polite');
+  callbacks?.speakText?.(spoken, () => {
+    callbacks?.onPlaybackEnd?.();
+  });
+
+  return spoken;
+}
+
+/**
+ * Centralized function to repeat all four answer options for the currently active question in order.
+ * Cancels ongoing playback, provides accessible visual/screen-reader feedback ("Reading Answer Options..."),
+ * speaks "Option A: ... Option B: ... Option C: ... Option D: ...", and returns to listening upon completion.
+ */
+export function repeatCurrentOptions(
+  questionOrGetter: Question | null | undefined | (() => Question | null | undefined),
+  callbacks?: RepeatExecutionCallbacks
+): string {
+  const q = typeof questionOrGetter === 'function' ? questionOrGetter() : questionOrGetter;
+  if (!q) return '';
+
+  const spoken = formatOptionsWithLabels(q);
+  if (!spoken) return '';
+
+  callbacks?.stopSpeaking?.();
+  callbacks?.onStatusMessage?.('Reading Answer Options...');
+  callbacks?.announce?.('Reading Answer Options...', 'polite');
+  callbacks?.speakText?.(spoken, () => {
+    callbacks?.onPlaybackEnd?.();
+  });
+
+  return spoken;
+}
+
+/**
+ * Centralized function to repeat only a single requested option (A, B, C, or D) for the currently active question.
+ * Cancels ongoing playback, provides accessible feedback ("Reading Option B..."),
+ * speaks "Option B: [text].", and returns to listening upon completion.
+ */
+export function repeatIndividualOption(
+  optionId: 'A' | 'B' | 'C' | 'D' | string,
+  questionOrGetter: Question | null | undefined | (() => Question | null | undefined),
+  callbacks?: RepeatExecutionCallbacks
+): string {
+  const q = typeof questionOrGetter === 'function' ? questionOrGetter() : questionOrGetter;
+  if (!q) return '';
+
+  const normalizedOpt = String(optionId || '').trim().toUpperCase() as 'A' | 'B' | 'C' | 'D';
+  if (!['A', 'B', 'C', 'D'].includes(normalizedOpt)) return '';
+
+  const spoken = formatSingleOptionPrompt(q, normalizedOpt);
+
+  callbacks?.stopSpeaking?.();
+  callbacks?.onStatusMessage?.(`Reading Option ${normalizedOpt}...`);
+  callbacks?.announce?.(`Reading Option ${normalizedOpt}...`, 'polite');
+  callbacks?.speakText?.(spoken, () => {
+    callbacks?.onPlaybackEnd?.();
+  });
+
+  return spoken;
 }

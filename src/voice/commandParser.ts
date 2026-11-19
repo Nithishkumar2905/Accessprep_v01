@@ -268,7 +268,7 @@ export function parseAssistanceIntent(
  * Wake phrase: "Hey Vision"
  */
 export function parseVisionWakeWord(cleanText: string): 'activate_vision' | 'deactivate_vision' | null {
-  const t = cleanText.toLowerCase().trim();
+  const t = cleanVoiceTranscript(cleanText);
 
   // Deactivation check first
   if (
@@ -277,7 +277,21 @@ export function parseVisionWakeWord(cleanText: string): 'activate_vision' | 'dea
     t === 'turn off vision' ||
     t === 'disable vision' ||
     t === 'stop vision' ||
-    t === 'exit vision'
+    t === 'exit vision' ||
+    t === 'disable voice assistant' ||
+    t === 'deactivate voice assistant' ||
+    t === 'turn off voice assistant' ||
+    t === 'stop voice assistant' ||
+    t === 'go to sleep' ||
+    t === 'sleep vision' ||
+    t === 'vision go to sleep' ||
+    t === 'hey vision go to sleep' ||
+    t === 'stop listening' ||
+    t === 'stop listening now' ||
+    t === 'stop listening vision' ||
+    t === 'vision stop listening' ||
+    t === 'hey vision stop listening' ||
+    t === 'please stop listening'
   ) {
     return 'deactivate_vision';
   }
@@ -305,6 +319,9 @@ export function parseVisionWakeWord(cleanText: string): 'activate_vision' | 'dea
     t.startsWith('hi vision ') ||
     t.startsWith('hello vision ') ||
     t.startsWith('activate vision ') ||
+    t.startsWith('okay vision ') ||
+    t.startsWith('ok vision ') ||
+    t.startsWith('hai vision ') ||
     t.includes('hey vision')
   ) {
     return 'activate_vision';
@@ -314,17 +331,32 @@ export function parseVisionWakeWord(cleanText: string): 'activate_vision' | 'dea
 }
 
 /**
- * Detects if the transcript signals to finalize and stop capturing speech:
- * Conversational wake-word cycle: "Stop listening"
+ * Detects if the transcript signals to explicitly deactivate the active voice session:
+ * e.g. "Stop Listening", "Disable Voice Assistant", "Go to Sleep", "Deactivate Vision"
  */
 export function parseStopListening(cleanText: string): boolean {
-  const t = cleanText.toLowerCase().trim();
+  const t = cleanVoiceTranscript(cleanText);
   const stopListeningPhrases = [
     'stop listening',
     'stop listening now',
     'stop listening vision',
     'vision stop listening',
     'hey vision stop listening',
+    'please stop listening',
+    'disable voice assistant',
+    'deactivate voice assistant',
+    'turn off voice assistant',
+    'stop voice assistant',
+    'go to sleep',
+    'sleep vision',
+    'vision go to sleep',
+    'hey vision go to sleep',
+    'deactivate vision',
+    'deactivate vision assistant',
+    'disable vision',
+    'turn off vision',
+    'stop vision',
+    'exit vision',
     'done listening',
     'done speaking',
     'stop capturing',
@@ -334,20 +366,27 @@ export function parseStopListening(cleanText: string): boolean {
   if (stopListeningPhrases.some((p) => t === p || t.endsWith(' ' + p) || t.startsWith(p + ' '))) {
     return true;
   }
-  return /(?:^|\s)stop\s+listening(?:\s|$)/i.test(t);
+  return /(?:^|\s)(?:stop\s+listening|disable\s+voice\s+assistant|deactivate\s+vision(?:\s+assistant)?|go\s+to\s+sleep)(?:\s|$)/i.test(t);
 }
 
 /**
  * Extracts the actionable command by stripping the wake phrase ("Hey Vision") and
- * stop phrase ("Stop listening") from an utterance.
+ * any explicit deactivation phrase ("Stop listening", "Go to sleep", etc.) from an utterance.
  */
 export function extractCommandFromConversationalPhrase(raw: string): string {
   let text = raw.trim();
   // Strip wake phrase from the start
-  text = text.replace(/^(?:hey\s+vision(?:\s+assistant)?|activate\s+vision(?:\s+assistant)?|turn\s+on\s+vision|start\s+vision|vision\s+assistant|vision|hi\s+vision|hello\s+vision|okay\s+vision|ok\s+vision|hai\s+vision)\s*/i, '');
-  // Strip stop phrase from the end or within
-  text = text.replace(/\s*(?:stop\s+listening(?:\s+now)?|vision\s+stop\s+listening|done\s+listening|stop\s+capturing)\s*$/i, '');
+  text = text.replace(
+    /^(?:hey\s+vision(?:\s+assistant)?|activate\s+vision(?:\s+assistant)?|turn\s+on\s+vision(?:\s+assistant)?|enable\s+vision(?:\s+assistant)?|start\s+vision(?:\s+assistant)?|vision\s+assistant|hi\s+vision|hello\s+vision|okay\s+vision|ok\s+vision|a\s+vision|hey\s+visual|hai\s+vision|vision)[,.:;!\s]*/i,
+    ''
+  );
+  // Strip stop/deactivation phrase from the end or within
+  text = text.replace(
+    /[,.:;!\s]*(?:(?:hey\s+)?vision\s+stop\s+listening|please\s+stop\s+listening|stop\s+listening(?:\s+now|\s+vision)?|disable\s+voice\s+assistant|deactivate\s+voice\s+assistant|turn\s+off\s+voice\s+assistant|stop\s+voice\s+assistant|(?:hey\s+vision\s+|vision\s+)?go\s+to\s+sleep|sleep\s+vision|deactivate\s+vision(?:\s+assistant)?|disable\s+vision|turn\s+off\s+vision|stop\s+vision|exit\s+vision|done\s+listening|done\s+speaking|stop\s+capturing|finish\s+command|end\s+command)[,.:;!\s]*$/i,
+    ''
+  );
   text = text.replace(/\bstop\s+listening\b/gi, '');
+  text = text.replace(/^[,.:;!\s]+|[,.:;!\s]+$/g, '');
   return text.trim();
 }
 
@@ -477,7 +516,26 @@ export type SubjectSelectionResult =
  * - Exact subject names and natural shorthand aliases ("Select reasoning", "Open math", etc.)
  */
 export function parseSubjectSelectionIntent(cleanText: string): SubjectSelectionResult | null {
-  const t = cleanText.toLowerCase().trim();
+  const t = cleanVoiceTranscript(cleanText);
+  if (!t) return null;
+
+  // Never intercept question/option repeat or exam control commands as subject selection
+  if (
+    /\b(?:repeat|read|replay|what\s+is|what\s+are)\b.*\b(?:question|prompt|option|options|choice|choices|answer|explanation)\b/.test(
+      t
+    )
+  ) {
+    return null;
+  }
+
+  const matchesPhraseList = (phrases: string[]) =>
+    phrases.some((p) => {
+      if (p.length <= 3 || !p.includes(' ')) {
+        // Short tokens like "1", "2", "all", "gk", "ga" require exact match or whole word
+        return t === p || new RegExp(`(?:^|\\s)${p}(?:\\s|$)`).test(t);
+      }
+      return t === p || t.includes(p);
+    });
 
   // 1. Prompting for available subjects
   const promptPhrases = [
@@ -538,7 +596,7 @@ export function parseSubjectSelectionIntent(cleanText: string): SubjectSelection
     'number 1',
     '1'
   ];
-  if (mathPhrases.some((p) => t === p || t.includes(p))) {
+  if (matchesPhraseList(mathPhrases)) {
     return {
       type: 'choose_subject',
       subject: 'Numerical and Mathematical Ability',
@@ -566,7 +624,7 @@ export function parseSubjectSelectionIntent(cleanText: string): SubjectSelection
     'number 2',
     '2'
   ];
-  if (reasoningPhrases.some((p) => t === p || t.includes(p))) {
+  if (matchesPhraseList(reasoningPhrases)) {
     return {
       type: 'choose_subject',
       subject: 'Reasoning Ability and Problem Solving',
@@ -594,7 +652,7 @@ export function parseSubjectSelectionIntent(cleanText: string): SubjectSelection
     'number 3',
     '3'
   ];
-  if (gaPhrases.some((p) => t === p || t.includes(p))) {
+  if (matchesPhraseList(gaPhrases)) {
     return {
       type: 'choose_subject',
       subject: 'General Awareness',
@@ -622,7 +680,7 @@ export function parseSubjectSelectionIntent(cleanText: string): SubjectSelection
     'number 4',
     '4'
   ];
-  if (englishPhrases.some((p) => t === p || t.includes(p))) {
+  if (matchesPhraseList(englishPhrases)) {
     return {
       type: 'choose_subject',
       subject: 'English Language and Comprehension',
@@ -643,7 +701,7 @@ export function parseSubjectSelectionIntent(cleanText: string): SubjectSelection
     'subject 5',
     '5'
   ];
-  if (allPhrases.some((p) => t === p || t.includes(p))) {
+  if (matchesPhraseList(allPhrases)) {
     return {
       type: 'choose_subject',
       subject: 'all',
@@ -758,11 +816,30 @@ export function matchScreenNavigation(
     'explain this question',
     'explain question',
     'read options',
+    'read option',
+    'read the options',
+    'read options again',
+    'read the options again',
+    'repeat option',
+    'repeat options',
+    'repeat the option',
+    'repeat the options',
+    'repeat answer choices',
+    'read answer choices',
     'repeat question',
+    'repeat the question',
+    'read question',
+    'read the question',
+    'read question again',
+    'read the question again',
     'next question',
     'previous question'
   ]);
-  if (examControlNonNavPhrases.has(normalized) || examControlNonNavPhrases.has(stripped)) {
+  if (
+    examControlNonNavPhrases.has(normalized) ||
+    examControlNonNavPhrases.has(stripped) ||
+    /\b(?:repeat|read)\s+(?:the\s+)?(?:answer\s+)?(?:question|option|options|choice|choices)\b/.test(normalized)
+  ) {
     return null;
   }
 

@@ -17,7 +17,10 @@ import {
   Mic,
   Bell
 } from 'lucide-react';
-import { useAccessibility } from '../context/AccessibilityContext.tsx';
+import {
+  useAccessibility,
+  VOICE_STATE_UI_MESSAGES
+} from '../context/AccessibilityContext.tsx';
 import { APPROVED_SCREENS, SCREEN_REGISTRY } from '../types/screens.ts';
 import { User } from '../db/database.ts';
 import { getPageHelp } from '../data/pageHelpRegistry.ts';
@@ -244,57 +247,47 @@ export function Header() {
               )}
             </button>
 
-            {/* Conversational Vision Assistant Button (Idle -> Hey Vision -> Listening -> Stop listening -> Responding -> Idle) */}
+            {/* Continuous Wake-Word Vision Assistant Button */}
             <button
               type="button"
               onClick={() => {
-                if (voiceAssistantState === 'listening') {
+                if (voiceAssistantState === 'LISTENING' || voiceAssistantState === 'WAKE_DETECTED') {
                   stopVoiceListening();
-                } else if (voiceAssistantState === 'responding') {
+                } else if (voiceAssistantState === 'SPEAKING') {
                   stopSpeaking();
                 } else {
                   if (!isBlindMode) toggleBlindMode();
-                  startVoiceListening();
+                  activateVisionAssistant();
                 }
               }}
-              aria-label={
-                voiceAssistantState === 'listening'
-                  ? "Vision is listening. Click or say 'Stop listening' to process."
-                  : voiceAssistantState === 'processing'
-                  ? "Vision is processing your command."
-                  : voiceAssistantState === 'responding'
-                  ? "Vision is speaking. Click to stop."
-                  : "Vision Assistant is idle. Click or say 'Hey Vision' to start listening."
-              }
-              title="Vision Conversational Assistant (Say 'Hey Vision' or 'Stop listening'. Alt+Space / Alt+V)"
+              aria-label={`Vision Assistant state: ${voiceAssistantState}. ${VOICE_STATE_UI_MESSAGES[voiceAssistantState]}`}
+              title={`Vision Assistant (${VOICE_STATE_UI_MESSAGES[voiceAssistantState]} — Alt+Space / Alt+V)`}
               className={`px-2.5 py-1 rounded text-xs font-bold flex items-center gap-1.5 border transition-colors ${
-                voiceAssistantState === 'listening'
+                voiceAssistantState === 'LISTENING' || voiceAssistantState === 'WAKE_DETECTED'
                   ? 'bg-red-600 text-white border-red-700 animate-pulse ring-2 ring-red-400'
-                  : voiceAssistantState === 'processing'
+                  : voiceAssistantState === 'PROCESSING'
                   ? 'bg-amber-400 text-slate-950 border-amber-500 ring-2 ring-amber-300'
-                  : voiceAssistantState === 'responding'
+                  : voiceAssistantState === 'SPEAKING'
                   ? 'bg-[#1749E8] text-white border-[#123BB8] ring-2 ring-blue-300'
+                  : voiceAssistantState === 'ERROR'
+                  ? 'bg-rose-100 text-rose-900 border-rose-300'
+                  : voiceAssistantState === 'STOPPED'
+                  ? 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-[#EEF4FF] hover:text-[#1749E8]'
                   : 'bg-white text-slate-700 border-[#D9E1EF] hover:bg-[#EEF4FF] hover:text-[#1749E8]'
               }`}
             >
               <Mic
                 className={`w-3.5 h-3.5 ${
-                  voiceAssistantState === 'listening'
+                  voiceAssistantState === 'LISTENING' || voiceAssistantState === 'WAKE_DETECTED'
                     ? 'text-white animate-ping'
-                    : voiceAssistantState === 'responding'
+                    : voiceAssistantState === 'SPEAKING'
                     ? 'text-white'
+                    : voiceAssistantState === 'ERROR'
+                    ? 'text-rose-700'
                     : 'text-[#1749E8]'
                 }`}
               />
-              <span>
-                {voiceAssistantState === 'listening'
-                  ? 'Listening...'
-                  : voiceAssistantState === 'processing'
-                  ? 'Processing...'
-                  : voiceAssistantState === 'responding'
-                  ? 'Speaking...'
-                  : "Vision: Say 'Hey Vision'"}
-              </span>
+              <span>{VOICE_STATE_UI_MESSAGES[voiceAssistantState]}</span>
             </button>
 
             {/* Font Scaler */}
@@ -512,71 +505,83 @@ export function Header() {
         </div>
       </div>
 
-      {/* Live Conversational Voice Assistant Status Bar (WCAG AAA live feedback) */}
-      {voiceAssistantState !== 'idle' && (
+      {/* Live Continuous Voice Assistant Status Bar (WCAG AAA live feedback) */}
+      {voiceAssistantState !== 'IDLE' && (
         <div
           role="status"
           aria-live="polite"
           className={`border-t px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs transition-colors ${
-            voiceAssistantState === 'listening'
+            voiceAssistantState === 'LISTENING' || voiceAssistantState === 'WAKE_DETECTED'
               ? 'bg-red-50 border-red-200 text-red-900'
-              : voiceAssistantState === 'processing'
+              : voiceAssistantState === 'PROCESSING'
               ? 'bg-amber-50 border-amber-200 text-amber-900'
-              : 'bg-blue-50 border-blue-200 text-blue-900'
+              : voiceAssistantState === 'SPEAKING'
+              ? 'bg-blue-50 border-blue-200 text-blue-900'
+              : voiceAssistantState === 'ERROR'
+              ? 'bg-rose-50 border-rose-200 text-rose-900'
+              : 'bg-slate-50 border-slate-200 text-slate-800'
           }`}
         >
-          <div className="flex items-center gap-2">
-            {voiceAssistantState === 'listening' && (
-              <>
-                <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" aria-hidden="true" />
-                <span className="font-bold uppercase tracking-wider text-[11px] text-red-700">Vision Listening</span>
-                <span className="text-slate-700">
-                  {capturedVoiceText ? (
-                    <strong className="text-slate-900">&ldquo;{capturedVoiceText}&rdquo;</strong>
-                  ) : (
-                    <span className="italic">Speak your command naturally, then say &ldquo;Stop listening&rdquo;...</span>
-                  )}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {/* State Badge & Visual Listening Indicator */}
+            {(voiceAssistantState === 'LISTENING' || voiceAssistantState === 'WAKE_DETECTED') && (
+              <span className="inline-flex items-center gap-1.5" aria-hidden="true">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
+                <span className="inline-flex items-end gap-0.5 h-3">
+                  <span className="w-0.5 h-2 bg-red-600 animate-pulse rounded-full" />
+                  <span className="w-0.5 h-3 bg-red-600 animate-bounce rounded-full" />
+                  <span className="w-0.5 h-1.5 bg-red-600 animate-pulse rounded-full" />
                 </span>
-              </>
+              </span>
             )}
-            {voiceAssistantState === 'processing' && (
-              <>
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-600 animate-bounce" aria-hidden="true" />
-                <span className="font-bold uppercase tracking-wider text-[11px] text-amber-800">Vision Processing</span>
-                <span className="text-slate-700">
-                  {capturedVoiceText ? (
-                    <span>Executing: &ldquo;{capturedVoiceText}&rdquo;</span>
-                  ) : (
-                    <span>Processing command...</span>
-                  )}
-                </span>
-              </>
+            {voiceAssistantState === 'PROCESSING' && (
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-600 animate-bounce" aria-hidden="true" />
             )}
-            {voiceAssistantState === 'responding' && (
-              <>
-                <Volume2 className="w-4 h-4 text-blue-700 animate-pulse" aria-hidden="true" />
-                <span className="font-bold uppercase tracking-wider text-[11px] text-blue-800">Vision Responding</span>
-                <span className="text-slate-700">Speaking response...</span>
-              </>
+            {voiceAssistantState === 'SPEAKING' && (
+              <Volume2 className="w-4 h-4 text-blue-700 animate-pulse" aria-hidden="true" />
+            )}
+
+            <span className="px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider text-[10px] bg-white/80 border border-current/20">
+              {voiceAssistantState}
+            </span>
+
+            <span className="font-bold text-xs">
+              {VOICE_STATE_UI_MESSAGES[voiceAssistantState]}
+            </span>
+
+            {capturedVoiceText && (
+              <span className="text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-300 shadow-2xs">
+                Live Speech: <strong className="text-slate-950">&ldquo;{capturedVoiceText}&rdquo;</strong>
+              </span>
             )}
           </div>
+
           <div className="flex items-center gap-2">
-            {voiceAssistantState === 'listening' && (
+            {(voiceAssistantState === 'LISTENING' || voiceAssistantState === 'WAKE_DETECTED') && (
               <button
                 type="button"
                 onClick={stopVoiceListening}
                 className="px-2.5 py-1 bg-red-700 hover:bg-red-800 text-white rounded font-bold uppercase tracking-wider text-[10px] shadow-xs focus:ring-2 focus:ring-red-500"
               >
-                Stop Listening &amp; Process
+                Stop Listening
               </button>
             )}
-            {voiceAssistantState === 'responding' && (
+            {voiceAssistantState === 'SPEAKING' && (
               <button
                 type="button"
                 onClick={stopSpeaking}
                 className="px-2 py-0.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-bold uppercase tracking-wider text-[10px]"
               >
                 Silence
+              </button>
+            )}
+            {(voiceAssistantState === 'STOPPED' || voiceAssistantState === 'ERROR') && (
+              <button
+                type="button"
+                onClick={activateVisionAssistant}
+                className="px-2.5 py-0.5 bg-[#1749E8] hover:bg-[#123BB8] text-white rounded font-bold uppercase tracking-wider text-[10px]"
+              >
+                Activate Vision
               </button>
             )}
           </div>

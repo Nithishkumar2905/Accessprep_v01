@@ -35,7 +35,10 @@ import {
   formatAllOptionsPrompt,
   formatSingleOptionPrompt,
   repeatQuestionTextOnly,
-  repeatOptionsTextOnly
+  repeatOptionsTextOnly,
+  repeatCurrentQuestion,
+  repeatCurrentOptions,
+  repeatIndividualOption
 } from '../utils/repeatQuestionHelper.ts';
 import {
   MOCK_EXAM_SUBMIT_CONFIRM_PROMPT,
@@ -404,25 +407,44 @@ export function MockExamScreen() {
     });
   }, [speakText, playBeacon, startVoiceListening, announce]);
 
+  const repeatQuestionAloud = useCallback((q: Question) => {
+    if (!q) return;
+    repeatCurrentQuestion(q, {
+      stopSpeaking,
+      speakText,
+      announce,
+      onPlaybackEnd: () => {
+        playBeacon('listening');
+        startVoiceListening();
+      }
+    });
+  }, [stopSpeaking, speakText, playBeacon, startVoiceListening, announce]);
+
   const repeatOptionsAloud = useCallback((q: Question) => {
     if (!q) return;
-    const prompt = formatAllOptionsPrompt(q);
-    announce('Reading question options', 'polite');
-    speakText(prompt, () => {
-      playBeacon('listening');
-      startVoiceListening();
+    repeatCurrentOptions(q, {
+      stopSpeaking,
+      speakText,
+      announce,
+      onPlaybackEnd: () => {
+        playBeacon('listening');
+        startVoiceListening();
+      }
     });
-  }, [speakText, playBeacon, startVoiceListening, announce]);
+  }, [stopSpeaking, speakText, playBeacon, startVoiceListening, announce]);
 
   const repeatSingleOptionAloud = useCallback((q: Question, opt: 'A' | 'B' | 'C' | 'D') => {
     if (!q) return;
-    const prompt = formatSingleOptionPrompt(q, opt);
-    announce(`Reading Option ${opt}`, 'polite');
-    speakText(prompt, () => {
-      playBeacon('listening');
-      startVoiceListening();
+    repeatIndividualOption(opt, q, {
+      stopSpeaking,
+      speakText,
+      announce,
+      onPlaybackEnd: () => {
+        playBeacon('listening');
+        startVoiceListening();
+      }
     });
-  }, [speakText, playBeacon, startVoiceListening, announce]);
+  }, [stopSpeaking, speakText, playBeacon, startVoiceListening, announce]);
 
   // Read aloud on mount or question index change
   useEffect(() => {
@@ -644,11 +666,14 @@ export function MockExamScreen() {
         return true;
       }
 
+      const activeQ = questionsRef.current[currentIdxRef.current] || currentQ;
+      if (!activeQ) return false;
+
       const optionsMap = {
-        A: currentQ.option_a,
-        B: currentQ.option_b,
-        C: currentQ.option_c,
-        D: currentQ.option_d
+        A: activeQ.option_a,
+        B: activeQ.option_b,
+        C: activeQ.option_c,
+        D: activeQ.option_d
       };
 
       const parsed = parseSpokenAnswer(transcript, optionsMap);
@@ -656,29 +681,27 @@ export function MockExamScreen() {
       if (parsed) {
         if (parsed.type === 'control') {
           if (parsed.command === 'repeat') {
-            // Repeat ONLY the question text — no prefix, no question number, no options
-            if (currentQ) { stopSpeaking(); speakText(repeatQuestionTextOnly(currentQ)); }
+            repeatQuestionAloud(activeQ);
             return true;
           }
           if (parsed.command === 'repeat_options') {
-            // Repeat ONLY the options — no "The options are:" prefix
-            if (currentQ) { stopSpeaking(); speakText(repeatOptionsTextOnly(currentQ)); }
+            repeatOptionsAloud(activeQ);
             return true;
           }
           if (parsed.command === 'repeat_option_a') {
-            repeatSingleOptionAloud(currentQ, 'A');
+            repeatSingleOptionAloud(activeQ, 'A');
             return true;
           }
           if (parsed.command === 'repeat_option_b') {
-            repeatSingleOptionAloud(currentQ, 'B');
+            repeatSingleOptionAloud(activeQ, 'B');
             return true;
           }
           if (parsed.command === 'repeat_option_c') {
-            repeatSingleOptionAloud(currentQ, 'C');
+            repeatSingleOptionAloud(activeQ, 'C');
             return true;
           }
           if (parsed.command === 'repeat_option_d') {
-            repeatSingleOptionAloud(currentQ, 'D');
+            repeatSingleOptionAloud(activeQ, 'D');
             return true;
           }
           if (parsed.command === 'read_slower') {
