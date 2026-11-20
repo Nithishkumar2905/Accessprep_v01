@@ -26025,7 +26025,7 @@
       "theme": "sapphire",
       "fontScale": 100,
       "dyslexiaFont": false,
-      "speechRate": 2,
+      "speechRate": 1,
       "speechPitch": 1,
       "voiceURI": "Google Bahasa Indonesia",
       "autoReadAloud": true,
